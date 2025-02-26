@@ -4,9 +4,14 @@
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
+#include "threads/synch.h"
+
+typedef unsigned long elem_type;
 
 static struct file *free_map_file; /* Free map file. */
 static struct bitmap *free_map;    /* Free map, one bit per sector. */
+size_t start_heuristic = 0;
+struct lock free_map_lock;
 
 /* Initializes the free map. */
 void free_map_init (void)
@@ -16,7 +21,20 @@ void free_map_init (void)
     PANIC ("bitmap creation failed--file system device is too large");
   bitmap_mark (free_map, FREE_MAP_SECTOR);
   bitmap_mark (free_map, ROOT_DIR_SECTOR);
+  lock_init (&free_map_lock);
 }
+
+#ifndef BITMAP_STRUCT_DEF
+#define BITMAP_STRUCT_DEF
+/* From the outside, a bitmap is an array of bits.  From the
+   inside, it's an array of elem_type (defined above) that
+   simulates an array of bits. */
+struct bitmap
+{
+  size_t bit_cnt;  /* Number of bits. */
+  elem_type *bits; /* Elements that represent bits. */
+};
+#endif
 
 /* Allocates CNT consecutive sectors from the free map and stores
    the first into *SECTORP.
@@ -25,15 +43,31 @@ void free_map_init (void)
    written. */
 bool free_map_allocate (size_t cnt, block_sector_t *sectorp)
 {
-  block_sector_t sector = bitmap_scan_and_flip (free_map, 0, cnt, false);
+
+  block_sector_t sector;
+  if (start_heuristic + cnt > free_map->bit_cnt)
+    {
+      start_heuristic = 0;
+    }
+  lock_acquire (&free_map_lock);
+  sector = bitmap_scan_and_flip (free_map, start_heuristic, cnt, false);
+  if (sector == BITMAP_ERROR)
+    {
+      start_heuristic = 0;
+      sector = bitmap_scan_and_flip (free_map, start_heuristic, cnt, false);
+    }
   if (sector != BITMAP_ERROR && free_map_file != NULL &&
       !bitmap_write (free_map, free_map_file))
     {
       bitmap_set_multiple (free_map, sector, cnt, false);
       sector = BITMAP_ERROR;
     }
+  lock_release (&free_map_lock);
   if (sector != BITMAP_ERROR)
-    *sectorp = sector;
+    {
+      *sectorp = sector;
+      start_heuristic = sector + 1;
+    }
   return sector != BITMAP_ERROR;
 }
 

@@ -5,7 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/synch.h"
-#include <hash.h>
+#include "filesys/directory.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -26,10 +26,10 @@ typedef int tid_t;
 #define PRI_DEFAULT 31 /* Default priority. */
 #define PRI_MAX 63     /* Highest priority. */
 
-struct thread;
+#define MX_OPEN_FILES 128 /* Max # of open files a process can have at once */
+#define FD_START_VAL 2    /* First non-special file descriptor value */
 
-/* Maximum number of files a process can open at a time */
-#define MAX_FILES 128
+struct thread;
 
 /* Struct to help with wait and exit by keeping track of child process's
  * information */
@@ -116,7 +116,6 @@ struct thread
   struct list locks;          /* List to store locks thread holds. */
   struct lock *locker;        /* Lock which thread is waiting on. */
   int donated_priority;       /* Priority donated by this lock to its holder. */
-  long long insert_time;      /* Time thread was inserted into list */
   struct list_elem allelem;   /* List element for all threads list. */
   struct list children_infos; /* List to store thread's children_infos */
 
@@ -133,7 +132,7 @@ struct thread
    * until process exits */
   struct file *exec_file;
 
-  struct file *open_files[MAX_FILES]; /* Contains process's open files*/
+  struct file *open_files[MX_OPEN_FILES]; /* Contains process's open files */
 
   /* Shared between thread.c and synch.c. */
   struct list_elem elem; /* List element. */
@@ -143,8 +142,9 @@ struct thread
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
   uint32_t *pagedir; /* Page directory. */
-  struct hash supp_page_table;
 #endif
+
+  struct dir *curr_directory; /* Process's current directory */
 
   /* Owned by thread.c. */
   unsigned magic; /* Detects stack overflow. */
@@ -186,11 +186,7 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
-/* Updates list if a thread's priority changes. */
-void upd_list (struct thread *t, struct list *l);
-void upd_parent (struct thread *curr); /* Donates priority to lock holders. */
-int max (int a, int b);     /* Returns maximum of the two int parameters. */
-void priority_yield (void); /* Yields if higher priority thread can run. */
+int max (int a, int b); /* Returns maximum of the two int parameters. */
 
 /* Comparator to sort threads by greater priority */
 bool priority_cmp (const struct list_elem *a, const struct list_elem *b,

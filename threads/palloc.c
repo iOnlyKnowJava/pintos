@@ -40,8 +40,6 @@ static void init_pool (struct pool *, void *base, size_t page_cnt,
                        const char *name);
 static bool page_from_pool (const struct pool *, void *page);
 
-struct semaphore frame_wait;
-
 /* Initializes the page allocator.  At most USER_PAGE_LIMIT
    pages are put into the user pool. */
 void palloc_init (size_t user_page_limit)
@@ -60,8 +58,6 @@ void palloc_init (size_t user_page_limit)
   init_pool (&kernel_pool, free_start, kernel_pages, "kernel pool");
   init_pool (&user_pool, free_start + kernel_pages * PGSIZE, user_pages,
              "user pool");
-
-  sema_init(&frame_wait,0);
 }
 
 /* Obtains and returns a group of PAGE_CNT contiguous free pages.
@@ -139,12 +135,6 @@ void palloc_free_multiple (void *pages, size_t page_cnt)
 
   ASSERT (bitmap_all (pool->used_map, page_idx, page_cnt));
   bitmap_set_multiple (pool->used_map, page_idx, page_cnt, false);
-
-  // Let processes know that more frames are available
-  for (size_t i = 0; i < page_cnt; i++)
-    {
-      sema_up (&frame_wait);
-    }
 }
 
 /* Frees the page at PAGE. */

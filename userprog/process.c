@@ -18,10 +18,6 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
-#include "vm/frame.h"
-#include "vm/page.h"
-
-extern struct lock filesys_access;
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -265,16 +261,13 @@ bool load (const char *file_name, void (**eip) (void), void **esp)
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL)
     goto done;
-  supp_page_table_init ();
   process_activate ();
 
   // Vincent driving
   char *save_ptr = NULL;
   char *arguments = strtok_r ((char *) file_name, " \t\n", &save_ptr);
   /* Open executable file. */
-  lock_acquire (&filesys_access);
   file = filesys_open (arguments);
-  lock_release (&filesys_access);
   if (file == NULL)
     {
       printf ("load: %s: open failed\n", arguments);
@@ -282,50 +275,36 @@ bool load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   // Open own executable file to deny modifications
-  lock_acquire (&filesys_access);
   thread_current ()->exec_file = filesys_open (arguments);
-  lock_release (&filesys_access);
   if (thread_current ()->exec_file != NULL)
     {
-      lock_acquire (&filesys_access);
       file_deny_write (thread_current ()->exec_file);
-      lock_release (&filesys_access);
     }
 
   /* Read and verify executable header. */
-  lock_acquire (&filesys_access);
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr ||
       memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7) || ehdr.e_type != 2 ||
       ehdr.e_machine != 3 || ehdr.e_version != 1 ||
       ehdr.e_phentsize != sizeof (struct Elf32_Phdr) || ehdr.e_phnum > 1024)
     {
-      lock_release (&filesys_access);
       printf ("load: %s: error loading executable\n", arguments);
       goto done;
     }
-  lock_release (&filesys_access);
 
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
   for (i = 0; i < ehdr.e_phnum; i++)
     {
       struct Elf32_Phdr phdr;
-      lock_acquire (&filesys_access);
 
       if (file_ofs < 0 || file_ofs > file_length (file))
-        {
-          lock_release (&filesys_access);
-          goto done;
-        }
-      lock_release (&filesys_access);
+        goto done;
       file_seek (file, file_ofs);
-      lock_acquire (&filesys_access);
+
       if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
         {
-          lock_release (&filesys_access);
           goto done;
         }
-      lock_release (&filesys_access);
       file_ofs += sizeof phdr;
       switch (phdr.p_type)
         {
@@ -385,15 +364,13 @@ bool load (const char *file_name, void (**eip) (void), void **esp)
 
 done:
   /* We arrive here whether the load is successful or not. */
-  lock_acquire (&filesys_access);
   file_close (file);
-  lock_release (&filesys_access);
   return success;
 }
 
 /* load() helpers. */
 
-bool install_page (void *upage, void *kpage, bool writable);
+static bool install_page (void *upage, void *kpage, bool writable);
 
 /* Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
@@ -404,13 +381,10 @@ static bool validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
     return false;
 
   /* p_offset must point within FILE. */
-  lock_acquire (&filesys_access);
   if (phdr->p_offset > (Elf32_Off) file_length (file))
     {
-      lock_release (&filesys_access);
       return false;
     }
-  lock_release (&filesys_access);
 
   /* p_memsz must be at least as big as p_filesz. */
   if (phdr->p_memsz < phdr->p_filesz)
@@ -466,6 +440,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
+  file_seek (file, ofs);
   while (read_bytes > 0 || zero_bytes > 0)
     {
       /* Calculate how to fill this page.
@@ -475,18 +450,29 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
-      // No need to load page, use demand paging
-      struct supp_entry *info = get_frame (upage);
-      info->file_read_bytes = page_read_bytes;
-      info->file_offset = ofs;
-      info->in_filesys = true;
-      info->writable = writable;
+      uint8_t *kpage = palloc_get_page (PAL_USER);
+      if (kpage == NULL)
+        return false;
+
+      /* Load this page. */
+      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+        {
+          palloc_free_page (kpage);
+          return false;
+        }
+      memset (kpage + page_read_bytes, 0, page_zero_bytes);
+
+      /* Add the page to the process's address space. */
+      if (!install_page (upage, kpage, writable))
+        {
+          palloc_free_page (kpage);
+          return false;
+        }
 
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
-      ofs += page_read_bytes;
     }
   return true;
 }
@@ -495,49 +481,69 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    user virtual memory. */
 static bool setup_stack (void **esp, char *arguments, char *save_ptr)
 {
-  *esp = PHYS_BASE;
-  // Matthew driving
-  // push tokenized commands
-  int argc = 0;
-  char *token;
-  for (token = arguments; token != NULL;
-       token = strtok_r (NULL, " \t\n", &save_ptr))
+  uint8_t *kpage;
+  bool success = false;
+
+  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  if (kpage != NULL)
     {
-      argc++;
-      size_t length = strnlen (token, 128) + 1;
-      *(char **) esp -= length;
-      // Matthew driving
-      get_frame (*esp);
-      strlcpy (*esp, token, length);
-    }
-  // word-align
-  void *save = *esp;
-  *(char **) esp -= (unsigned long long) (*esp) % 4;
-  *(char **) esp -= sizeof (char *);
-  // argv elements
-  while (save < PHYS_BASE)
-    {
-      if (*((char *) (save) -1) == '\0')
+      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+      if (success)
         {
+          *esp = PHYS_BASE;
+          // Matthew driving
+          // push tokenized commands
+          int argc = 0;
+          char *token;
+          for (token = arguments; token != NULL;
+               token = strtok_r (NULL, " \t\n", &save_ptr))
+            {
+              argc++;
+              size_t length = strnlen (token, 128) + 1;
+              *(char **) esp -= length;
+              if (*esp < ((uint8_t *) PHYS_BASE) - PGSIZE)
+                goto fail_allocation;
+              strlcpy (*esp, token, length);
+            }
+          // word-align
+          void *save = *esp;
+          *(char **) esp -= (unsigned long long) (*esp) % 4;
           *(char **) esp -= sizeof (char *);
-          get_frame (*esp);
-          **(char ***) esp = save;
+          // argv elements
+          while (save < PHYS_BASE)
+            {
+              if (*((char *) (save) -1) == '\0')
+                {
+                  *(char **) esp -= sizeof (char *);
+                  if (*esp < ((uint8_t *) PHYS_BASE) - PGSIZE)
+                    goto fail_allocation;
+                  **(char ***) esp = save;
+                }
+              save = (char *) save + 1;
+            }
+          *(char **) esp -= sizeof (char **);
+          if (*esp < ((uint8_t *) PHYS_BASE) - PGSIZE)
+            goto fail_allocation;
+          **(char ***) esp = *(char **) esp + sizeof (char **);
+          // Vincent driving
+          // argc
+          *(char **) esp -= sizeof (int);
+          if (*esp < ((uint8_t *) PHYS_BASE) - PGSIZE)
+            goto fail_allocation;
+          **(int **) esp = argc;
+          // return address
+          *(char **) esp -= sizeof (void (*) ());
+          if (*esp < ((uint8_t *) PHYS_BASE) - PGSIZE)
+            goto fail_allocation;
         }
-      save = (char *) save + 1;
+      else
+        {
+        fail_allocation:
+          success = false;
+          palloc_free_page (kpage);
+        }
     }
-  *(char **) esp -= sizeof (char **);
-  get_frame (*esp);
-  **(char ***) esp = *(char **) esp + sizeof (char **);
-  // Vincent driving
-  // argc
-  *(char **) esp -= sizeof (int);
-  get_frame (*esp);
-  **(int **) esp = argc;
-  // return address
-  *(char **) esp -= sizeof (void (*) ());
-  get_frame (*esp);
-  // If reach here, success
-  return true;
+  return success;
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel
@@ -549,7 +555,7 @@ static bool setup_stack (void **esp, char *arguments, char *save_ptr)
    with palloc_get_page().
    Returns true on success, false if UPAGE is already mapped or
    if memory allocation fails. */
-bool install_page (void *upage, void *kpage, bool writable)
+static bool install_page (void *upage, void *kpage, bool writable)
 {
   struct thread *t = thread_current ();
 

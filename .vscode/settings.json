@@ -94,16 +94,9 @@
         "cstdbool": "c",
         "typeindex": "c",
         "typeinfo": "c",
-        "round.h": "c",
-        "init.h": "c",
         "malloc.h": "c",
-        "hash.h": "c",
-        "stdint.h": "c",
-        "process.h": "c",
-        "palloc.h": "c",
-        "gdt.h": "c",
         "block.h": "c",
-        "exception.h": "c"
+        "seq-test.h": "c"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }

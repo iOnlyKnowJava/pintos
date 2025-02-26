@@ -61,8 +61,6 @@ void list_init (struct list *list)
   list->head.next = &list->tail;
   list->tail.prev = &list->head;
   list->tail.next = NULL;
-  // Vincent driving
-  list->insert_time = 0;
 }
 
 /* Returns the beginning of LIST.  */
@@ -342,7 +340,8 @@ static struct list_elem *find_end_of_run (struct list_elem *a,
   do
     {
       a = list_next (a);
-  } while (a != b && !less (a, list_prev (a), aux));
+    }
+  while (a != b && !less (a, list_prev (a), aux));
   return a;
 }
 
@@ -406,7 +405,8 @@ void list_sort (struct list *list, list_less_func *less, void *aux)
           /* Merge the runs. */
           inplace_merge (a0, a1b0, b1, less, aux);
         }
-  } while (output_run_cnt > 1);
+    }
+  while (output_run_cnt > 1);
 
   ASSERT (is_sorted (list_begin (list), list_end (list), less, aux));
 }

@@ -13,6 +13,8 @@
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+#include "filesys/directory.h"
+#include "filesys/filesys.h"
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -72,25 +74,6 @@ static tid_t allocate_tid (void);
 
 /* Controls access to ready list */
 struct semaphore ready_control;
-
-/* Comparator used to sort threads by priority.
-   Returns true if a has higher priority than b, and false
-   otherwise.
-*/
-bool priority_cmp (const struct list_elem *a, const struct list_elem *b,
-                   void *x)
-{
-  struct thread *aa = list_entry (a, struct thread, elem);
-  struct thread *bb = list_entry (b, struct thread, elem);
-  int val_a = max (aa->donated_priority, aa->priority);
-  int val_b = max (bb->donated_priority, bb->priority);
-  // If priority is same, sort based in time inserted into list
-  if (val_a == val_b)
-    {
-      return aa->insert_time < bb->insert_time;
-    }
-  return val_a > val_b;
-}
 
 /* Function to return the max of two ints */
 int max (int a, int b)
@@ -222,12 +205,16 @@ tid_t thread_create (const char *name, int priority, thread_func *function,
   tid = t->tid = allocate_tid ();
 
   // Vincent driving
+
   // Initialize child info struct and add to parent's children_infos list
   struct child_info *info = malloc (sizeof (struct child_info));
   if (info == NULL)
     return TID_ERROR;
 
+  // Inherit parent's current directory
+  t->curr_directory = dir_reopen (thread_current ()->curr_directory);
   child_info_init (info);
+
   info->tid = t->tid;
   t->info_to_update = info;
   t->parent = thread_current ();
@@ -250,10 +237,8 @@ tid_t thread_create (const char *name, int priority, thread_func *function,
 
   /* Add to run queue. */
   sema_down (&ready_control);
-  t->insert_time = ready_list.insert_time++;
   thread_unblock (t);
   // Vincent driving
-  priority_yield ();
   sema_up (&ready_control);
 
   return tid;
@@ -291,7 +276,7 @@ void thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_insert_ordered (&ready_list, &t->elem, &priority_cmp, NULL);
+  list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -325,14 +310,6 @@ tid_t thread_tid (void) { return thread_current ()->tid; }
 void thread_exit (void)
 {
   ASSERT (!intr_context ());
-
-  // Free any locks still held by this thread
-  while (!list_empty (&thread_current ()->locks))
-    {
-      struct lock *lock_to_free = list_entry (
-          list_pop_front (&thread_current ()->locks), struct lock, elem);
-      lock_release (lock_to_free);
-    }
 
   // Free info if parent has already exited
   if (thread_current ()->info_to_update != NULL)
@@ -394,8 +371,7 @@ void thread_yield (void)
   if (cur != idle_thread)
     {
       // Matthew driving
-      cur->insert_time = ready_list.insert_time++;
-      list_insert_ordered (&ready_list, &cur->elem, &priority_cmp, NULL);
+      list_push_back (&ready_list, &cur->elem);
     }
   cur->status = THREAD_READY;
   schedule ();
@@ -417,28 +393,6 @@ void thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
-/* Yields if a higher priority thread is on the ready list. */
-void priority_yield ()
-{
-  if (!list_empty (&ready_list))
-    {
-      struct thread *highest_priority =
-          list_entry (list_front (&ready_list), struct thread, elem);
-      if (priority_cmp (&highest_priority->elem, &thread_current ()->elem,
-                        NULL))
-        {
-          if (intr_context ())
-            {
-              intr_yield_on_return ();
-            }
-          else
-            {
-              thread_yield ();
-            }
-        }
-    }
-}
-
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority (int new_priority)
 {
@@ -446,9 +400,6 @@ void thread_set_priority (int new_priority)
   curr->priority = new_priority;
 
   // Matthew driving
-  sema_down (&ready_control);
-  priority_yield ();
-  sema_up (&ready_control);
 }
 
 /* Returns the current thread's priority. */
@@ -566,8 +517,7 @@ static void init_thread (struct thread *t, const char *name, int priority)
   t->donated_priority = PRI_MIN;
   t->magic = THREAD_MAGIC;
   t->locker = NULL;
-  t->insert_time = __LONG_LONG_MAX__;
-  for (int i = 0; i < 128; i++)
+  for (int i = 0; i < MX_OPEN_FILES; i++)
     {
       t->open_files[i] = NULL;
     }
@@ -576,6 +526,7 @@ static void init_thread (struct thread *t, const char *name, int priority)
   t->info_to_update = NULL;
   t->exec_success = true;
   t->parent = NULL;
+  t->curr_directory = NULL;
   sema_init (&t->exec_sema, 0);
   list_init (&t->children_infos);
   list_init (&t->locks);
@@ -692,66 +643,3 @@ static tid_t allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
-
-/* Maintains the sorted order of the list l by finding and removing
-   t from the list and then adding it back again into its correct place.
-   If t is not found in l or t or l are NULL, nothing happens.
-*/
-void upd_list (struct thread *t, struct list *l)
-{
-  if (t == NULL || l == NULL)
-    {
-      return;
-    }
-  struct list_elem *e;
-  for (e = list_begin (l); e != list_end (l); e = list_next (e))
-    {
-      if (&list_entry (e, struct thread, elem)->elem == &t->elem)
-        {
-          enum intr_level old_level;
-          old_level = intr_disable ();
-          // Make sure removal and reinsertion occur without interruption
-          list_remove (e);
-          list_insert_ordered (l, &t->elem, &priority_cmp, NULL);
-          intr_set_level (old_level);
-          return;
-        }
-    }
-}
-
-/* Donates priority of curr to any threads that hold locks that curr and
-   its lock holders are waiting on. Handles nested donations.
-*/
-void upd_parent (struct thread *curr)
-{
-  if (curr == NULL || curr->locker == NULL)
-    {
-      return;
-    }
-  // Matthew driving
-  while (curr != NULL && curr->locker != NULL)
-    {
-      struct thread *parent = curr->locker->holder;
-      if (parent == NULL)
-        {
-          break;
-        }
-      int donate_val = max (curr->priority, curr->donated_priority);
-      if (parent->donated_priority >= donate_val)
-        {
-          break;
-        }
-      /* Make sure multiple threads not modifying donated_priority all
-      at same time */
-      enum intr_level old_level;
-      old_level = intr_disable ();
-      parent->donated_priority = max (parent->donated_priority, donate_val);
-      intr_set_level (old_level);
-      curr = parent;
-    }
-  // curr either null or not locked and on ready list. Reorder ready_list
-  // since curr priority might have changed.
-  sema_down (&ready_control);
-  upd_list (curr, &ready_list);
-  sema_up (&ready_control);
-}

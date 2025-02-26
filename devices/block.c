@@ -5,8 +5,6 @@
 #include "devices/ide.h"
 #include "threads/malloc.h"
 
-#ifndef BLOCK_STRUCT_DEFINED
-#define BLOCK_STRUCT_DEFINED
 /* A block device. */
 struct block
 {
@@ -22,7 +20,6 @@ struct block
   unsigned long long read_cnt;  /* Number of sectors read. */
   unsigned long long write_cnt; /* Number of sectors written. */
 };
-#endif
 
 /* List of all block devices. */
 static struct list all_blocks = LIST_INITIALIZER (all_blocks);

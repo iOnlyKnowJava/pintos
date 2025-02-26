@@ -28,7 +28,6 @@
 #include "userprog/gdt.h"
 #include "userprog/syscall.h"
 #include "userprog/tss.h"
-#include "vm/frame.h"
 #else
 #include "tests/threads/tests.h"
 #endif
@@ -123,9 +122,6 @@ int main (void)
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
-#endif
-#ifdef USERPROG
-  frametable_init();
 #endif
 
   printf ("Boot complete.\n");

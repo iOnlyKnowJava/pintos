@@ -1,0 +1,100 @@
+Project 4: Group Evaluation Document
+Please submit ***one per person*** to the “Project 4 Group Evaluation” 
+assignment on Canvas
+
+
+Name:Vincent Xia
+EID:vx92
+
+
+
+
+How did you do on this project?
+I think I did good, all things considered.
+
+
+
+
+
+What did you learn?
+I learned how a file system actually works and is structured and how
+the OS implements subdirectories and extendible files.
+
+
+
+
+
+What did your group do well?
+We did well to finish out the last project despite cutting it kind of
+close to the deadline.
+
+
+
+
+
+
+
+What did you learn doing group work this semester that you will carry 
+forward into the future?
+I learned that for groups it is better to talk over possibilities before
+implementing. Also, I learned how to communicate my ideas better.
+
+
+
+
+
+
+
+What did you learn this semester about approaching large projects that 
+you will carry forward into the future?
+I learned that having good time management and scheduling is crucial
+in group projects.
+
+
+
+
+
+
+
+---------Evaluation of Partner----------------
+****copy for each partner****
+Name of your project partner:Matthew Zhao
+EID of your project partner:mz22238
+
+Did this group member consistently attend and arrive on time to
+meetings?  Explain.
+Yes; we were able to schedule and hold many meetings throughout the project.
+
+
+
+Did this group member come to meetings prepared to work?  Explain.
+Yes; we made good progress on the project on the weeks outside of Thanksgiving
+break;
+
+
+
+Did this group member both volunteer their own ideas and encourage
+ideas from you?  Explain.
+Yes; we collaborated on the designs of the file system and on what changes
+we needed to do in order to debug mistakes.
+
+
+
+Did this group member cooperate in general, and in particular did
+they share driving time and help the driver when they were a
+navigator?  Explain.
+Yes; we took turns leading and sharing ideas.
+
+
+
+
+Overall, do you think this group member contributed equally to the
+group?  What percentage of work would you estimate this group member
+put forth? Explain.
+Yes; 50%, we bounced ideas off each other and worked together for most
+of the project.
+
+
+
+Further comments:
+N/A

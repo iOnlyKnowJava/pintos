@@ -4,9 +4,6 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
-#include "vm/page.h"
-#include "vm/frame.h"
-#include "threads/vaddr.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -86,6 +83,7 @@ static void kill (struct intr_frame *f)
         printf ("%s: dying due to interrupt %#04x (%s).\n", thread_name (),
                 f->vec_no, intr_name (f->vec_no));
         intr_dump_frame (f);
+
         // Matthew driving
         exit_process (-1);
 
@@ -136,6 +134,7 @@ static void page_fault (struct intr_frame *f)
   /* Turn interrupts back on (they were only off so that we could
      be assured of reading CR2 before it changed). */
   intr_enable ();
+
   /* Count page faults. */
   page_fault_cnt++;
 
@@ -144,29 +143,14 @@ static void page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  if (!not_present)
-    {
-      exit_process (-1); // Wrote to read only
-    }
+  /* To implement virtual memory, delete the rest of the function
+     body, and replace it with code that brings in the page to
+     which fault_addr refers. */
+  printf ("Page fault at %p: %s error %s page in %s context.\n", fault_addr,
+          not_present ? "not present" : "rights violation",
+          write ? "writing" : "reading", user ? "user" : "kernel");
 
-  struct supp_entry *info = get_entry (fault_addr);
-  if (info == NULL)
-    {
-      // Vincent driving
-      if (((unsigned) f->esp - (unsigned) fault_addr <= PUSHABYTES ||
-           fault_addr >= f->esp) &&
-          is_user_vaddr(fault_addr) &&
-          (unsigned) PHYS_BASE - (unsigned) fault_addr <= (STACKLIMIT))
-        {
-          // Implicit stack growth
-          swap_frame (get_frame (fault_addr));
-          return;
-        }
-      else
-        {
-          kill (f);
-        }
-    }
+  printf ("There is no crying in Pintos!\n");
 
-  swap_frame (info);
+  kill (f);
 }
